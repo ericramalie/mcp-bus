@@ -1,0 +1,6 @@
+{
+  "name": "SBS Transit - Journey Portal & Live Bus Arrival",
+  "description": "Real-time Singapore public transport portal for SBS Transit bus arrivals, MRT network alerts, service routes, and journey planning.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
