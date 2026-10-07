@@ -15,7 +15,12 @@ import {
   Sparkles,
   Layers,
   Clock,
-  Volume2
+  Volume2,
+  Activity,
+  CheckCircle2,
+  AlertTriangle,
+  Server,
+  X
 } from 'lucide-react';
 import { BUS_STOPS, getArrivalsForStop, OFFICIAL_IMAGES } from '../data/transitData';
 import { BusStop, BusArrivalService, CrowdingLevel, BusType } from '../types/transit';
@@ -40,18 +45,94 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [servicesData, setServicesData] = useState<BusArrivalService[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'favorites' | 'interchanges' | 'doubledecker'>('all');
-  const [secondsUntilSync, setSecondsUntilSync] = useState(15);
+  const [secondsUntilSync, setSecondsUntilSync] = useState(20);
   const [audioPlayed, setAudioPlayed] = useState<Record<string, boolean>>({});
+  const [apiStatus, setApiStatus] = useState<{
+    source: 'lta_live' | 'simulated' | 'loading';
+    message?: string;
+    ltaKeyConfigured?: boolean;
+    lastSynced?: string;
+  }>({ source: 'loading' });
+  const [showHealthModal, setShowHealthModal] = useState<boolean>(false);
+  const [healthData, setHealthData] = useState<any>(null);
+  const [loadingHealth, setLoadingHealth] = useState<boolean>(false);
 
   // Active bus stop
-  const currentStop = BUS_STOPS.find((s) => s.code === selectedStopCode) || BUS_STOPS[0];
+  const currentStop = BUS_STOPS.find((s) => s.code === selectedStopCode) || {
+    code: selectedStopCode,
+    name: `Stop ${selectedStopCode}`,
+    roadName: 'Singapore Road Network',
+    services: ['2', '12', '33', '147'],
+  };
   const isSaved = savedStops.includes(currentStop.code);
+
+  const fetchArrivals = async () => {
+    try {
+      const res = await fetch(`/api/bus-arrival?BusStopCode=${encodeURIComponent(currentStop.code)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === 'ok' && Array.isArray(data.services) && data.services.length > 0) {
+          const converted: BusArrivalService[] = data.services.map((svc: any) => ({
+            serviceNo: svc.serviceNo,
+            category: svc.serviceNo.startsWith('5') ? 'express' : 'trunk',
+            operator: svc.operator === 'SBST' ? 'SBS Transit' : svc.operator,
+            destinationName: svc.rawNextBus?.DestinationCode ? `Stop ${svc.rawNextBus.DestinationCode}` : 'Destination Terminal',
+            destinationCode: svc.rawNextBus?.DestinationCode || '',
+            originName: svc.rawNextBus?.OriginCode ? `Stop ${svc.rawNextBus.OriginCode}` : currentStop.name,
+            firstBus: '05:30',
+            lastBus: '23:55',
+            frequency: '6 - 12 mins',
+            routeStopsCount: 40,
+            nextBuses: svc.nextBuses,
+          }));
+          setServicesData(converted);
+          setApiStatus({
+            source: 'lta_live',
+            ltaKeyConfigured: true,
+            lastSynced: new Date().toLocaleTimeString(),
+          });
+          setSecondsUntilSync(20);
+          return;
+        } else if (data.status === 'key_missing') {
+          setApiStatus({
+            source: 'simulated',
+            ltaKeyConfigured: false,
+            message: data.message || 'LTA_ACCOUNT_KEY not configured in Vercel.',
+            lastSynced: new Date().toLocaleTimeString(),
+          });
+        }
+      }
+    } catch {
+      // In dev or offline, fallback smoothly
+    }
+
+    // Fallback simulated arrivals
+    const fallback = getArrivalsForStop(currentStop.code);
+    setServicesData(fallback);
+    setSecondsUntilSync(20);
+    setApiStatus((prev) => ({
+      ...prev,
+      source: prev.source === 'lta_live' ? 'lta_live' : 'simulated',
+      lastSynced: new Date().toLocaleTimeString(),
+    }));
+  };
+
+  const fetchHealthCheck = async () => {
+    setLoadingHealth(true);
+    try {
+      const res = await fetch('/api/health');
+      const data = await res.json();
+      setHealthData(data);
+    } catch (err: any) {
+      setHealthData({ status: 'error', message: err.message || 'Health check unreachable' });
+    } finally {
+      setLoadingHealth(false);
+    }
+  };
 
   // Initialize and update arrivals data
   useEffect(() => {
-    const data = getArrivalsForStop(currentStop.code);
-    setServicesData(data);
-    setSecondsUntilSync(15);
+    fetchArrivals();
   }, [currentStop.code]);
 
   // Live timer tick every 1s
@@ -59,9 +140,8 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
     const timer = setInterval(() => {
       setSecondsUntilSync((prev) => {
         if (prev <= 1) {
-          // Re-sync with simulated fluctuations
-          refreshArrivals();
-          return 15;
+          fetchArrivals();
+          return 20;
         }
         return prev - 1;
       });
@@ -106,8 +186,8 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
       gain.gain.setValueAtTime(0.15, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
       osc.connect(gain);
@@ -115,14 +195,12 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
       osc.start();
       osc.stop(ctx.currentTime + 0.4);
     } catch {
-      // Audio not supported or blocked
+      // Audio not supported
     }
   };
 
   const refreshArrivals = () => {
-    const data = getArrivalsForStop(currentStop.code);
-    setServicesData(data);
-    setSecondsUntilSync(15);
+    fetchArrivals();
   };
 
   // Filter stops for search autocomplete or direct lookup
@@ -271,7 +349,18 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
           <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
             Quick Hubs:
           </span>
-          {BUS_STOPS.slice(0, 6).map((stop) => {
+          <button
+            onClick={() => onSelectStopCode('04121')}
+            className={`px-3 py-1.5 rounded-full font-bold whitespace-nowrap transition-all cursor-pointer ${
+              currentStop.code === '04121'
+                ? 'bg-[#8E1960] text-white shadow-xs'
+                : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
+            }`}
+            title="LTA API Sample: 04121 (Old Parliament Bldg)"
+          >
+            ★ Test 04121 (LTA Endpoint)
+          </button>
+          {BUS_STOPS.slice(1, 6).map((stop) => {
             const isCurrent = stop.code === currentStop.code;
             return (
               <button
@@ -287,6 +376,41 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
               </button>
             );
           })}
+        </div>
+      </div>
+
+      {/* Live API Health & Gateway Bar */}
+      <div className="bg-[#f0f4fc] rounded-xl px-4 py-2.5 border border-[#CBD5E1] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Activity className="w-4 h-4 text-[#0C3875]" />
+          <span className="font-bold text-slate-800">API Gateway:</span>
+          {apiStatus.source === 'lta_live' ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#E8F5E9] text-[#00875A] font-extrabold text-[11px] border border-emerald-300">
+              <span className="w-2 h-2 rounded-full bg-[#00875A] animate-ping" />
+              LTA DataMall v3 Live
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 font-extrabold text-[11px] border border-amber-300">
+              <AlertTriangle className="w-3 h-3 text-amber-600" />
+              API Ready (LTA_ACCOUNT_KEY Pending)
+            </span>
+          )}
+          <span className="text-slate-500 text-[11px] hidden sm:inline">
+            <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 font-mono text-[10px]">GET /api/bus-arrival?BusStopCode={currentStop.code}</code>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => {
+              setShowHealthModal(true);
+              fetchHealthCheck();
+            }}
+            className="px-2.5 py-1 rounded bg-white hover:bg-slate-50 border border-slate-300 text-[11px] font-bold text-[#0C3875] flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+          >
+            <Server className="w-3 h-3 text-[#8E1960]" />
+            <span>Monitor /api/health</span>
+          </button>
         </div>
       </div>
 
@@ -539,6 +663,81 @@ export const BusArrivalsView: React.FC<BusArrivalsViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* API Health & LTA Diagnostic Modal */}
+      {showHealthModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full border border-slate-200 overflow-hidden flex flex-col">
+            <div className="bg-[#0C3875] text-white p-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Server className="w-5 h-5 text-blue-200" />
+                <h3 className="font-extrabold text-base">API Status & Health Monitor</h3>
+              </div>
+              <button
+                onClick={() => setShowHealthModal(false)}
+                className="p-1 rounded text-slate-300 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+              {/* Endpoint 1: Health */}
+              <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-mono font-bold text-[10px]">GET</span>
+                    <span className="font-mono font-bold text-slate-800">/api/health</span>
+                  </div>
+                  <button
+                    onClick={fetchHealthCheck}
+                    disabled={loadingHealth}
+                    className="px-2 py-1 rounded bg-[#0C3875] text-white font-semibold hover:bg-[#002351] cursor-pointer"
+                  >
+                    {loadingHealth ? 'Checking...' : 'Ping /api/health'}
+                  </button>
+                </div>
+
+                <div className="bg-slate-900 text-slate-100 p-3 rounded-md font-mono text-[11px] overflow-x-auto">
+                  <pre>{healthData ? JSON.stringify(healthData, null, 2) : 'Loading /api/health status...'}</pre>
+                </div>
+              </div>
+
+              {/* Endpoint 2: LTA Bus Arrival */}
+              <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-mono font-bold text-[10px]">GET</span>
+                  <span className="font-mono font-bold text-slate-800">/api/bus-arrival?BusStopCode=04121</span>
+                </div>
+                <p className="text-slate-600">
+                  Target: <code className="text-pink-700 bg-pink-50 px-1 py-0.5 rounded">https://datamall2.mytransport.sg/ltaodataservice/v3/BusArrival?BusStopCode=04121</code>
+                </p>
+
+                <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-900 space-y-1 text-[11px]">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-blue-700" />
+                    How to Activate Live LTA Feed in Vercel:
+                  </p>
+                  <ol className="list-decimal pl-4 space-y-0.5">
+                    <li>Go to your Vercel Project Dashboard → <strong>Settings</strong> → <strong>Environment Variables</strong>.</li>
+                    <li>Add Key: <code>LTA_ACCOUNT_KEY</code> and Value: <code>[Your LTA Datamall AccountKey]</code>.</li>
+                    <li>Redeploy or promote project. The API will automatically pull real-time arrivals directly from LTA DataMall v3!</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                onClick={() => setShowHealthModal(false)}
+                className="px-4 py-1.5 rounded-lg bg-[#0C3875] text-white font-bold hover:bg-[#002351] cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -14,6 +14,14 @@ export const OFFICIAL_IMAGES = {
 
 export const BUS_STOPS: BusStop[] = [
   {
+    code: '04121',
+    name: 'Old Parliament Bldg',
+    roadName: 'High St',
+    description: 'Opposite The Treasury / Supreme Court, near City Hall MRT',
+    mrtConnections: ['NS25', 'EW13', 'CC3'],
+    services: ['2', '12', '33', '147', '190'],
+  },
+  {
     code: '04168',
     name: 'Dhoby Ghaut Stn',
     roadName: 'Orchard Rd',
